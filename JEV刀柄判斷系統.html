@@ -1,0 +1,1496 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <title>JEV 刀柄組合剪斷判定系統</title>
+    <style>
+        .sev-pill { padding: .15rem .6rem; border-radius: 9999px; font-size: .78rem; font-weight: 700; white-space: nowrap; }
+        .sev0 { background: #dcfce7; color: #166534; }
+        .sev1 { background: #fef3c7; color: #92400e; }
+        .sev2 { background: #fee2e2; color: #b91c1c; }
+        .sev3 { background: #7f1d1d; color: #fecaca; }
+        .cell-out-l { background: #fee2e2 !important; }
+        .cell-out-r { background: #fde68a !important; }
+        .cell-out-both { background: #fca5a5 !important; }
+        .cell-ok { background: #f3f4f6; }
+        pre { white-space: pre-wrap; word-break: break-word; }
+    </style>
+</head>
+<body class="bg-gray-100 p-6">
+
+<div class="max-w-6xl mx-auto bg-white p-6 rounded-xl shadow-lg">
+
+    <h1 class="text-2xl font-bold mb-1 text-blue-800">JEV 刀柄組合剪斷判定系統</h1>
+    <p class="text-sm text-gray-500 mb-5">依量測值與基準值比對，判定組合是否可能「全刀前端剪不斷／前端剪不斷／剪不斷（不利）」</p>
+
+    <!-- ① JEV 設定 -->
+    <div class="mb-6 border p-4 rounded-lg bg-blue-50">
+        <h2 class="font-bold text-blue-800 mb-2">① JEV AI 地端金鑰授權</h2>
+        <div class="mb-3">
+            <label class="block text-sm font-semibold mb-1">JEV 金鑰</label>
+            <div class="flex gap-2">
+                <input type="password" id="jevKey" class="flex-1 p-2 border rounded bg-white font-mono text-sm" placeholder="請在此貼上您的 JEV / TypeSafe API 金鑰（如 ts_live_...）">
+                <button type="button" onclick="toggleKeyVisibility()" class="px-3 py-2 border rounded bg-gray-100 hover:bg-gray-200 text-xs text-gray-700">顯示/隱藏</button>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">金鑰僅存於您本機瀏覽器，不會外傳；地端自動連線官方 System One API。</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+            <button onclick="testKey()" id="testBtn" class="bg-gray-700 text-white px-4 py-2 rounded hover:bg-gray-800 text-sm font-semibold">測試開通狀態（驗證連線）</button>
+            <button onclick="runJevJudge()" id="jevJudgeBtn" class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 text-sm font-semibold">用 JEV 判斷分析</button>
+        </div>
+        <div id="keyStatus" class="mt-2 text-sm font-bold hidden"></div>
+        <div id="proxyTip" class="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 p-2.5 rounded hidden">
+            💡 <b>地端連線提示</b>：若出現連線失敗，請在資料夾中雙擊執行 <b>「啟動系統.bat」</b>，即可透過本機服務避開瀏覽器跨域限制！
+        </div>
+    </div>
+
+    <!-- ② 基準值 -->
+    <div class="mb-6 border p-4 rounded-lg">
+        <div class="flex flex-wrap items-center justify-between mb-2">
+            <h2 class="font-bold text-blue-800">② 基準值設定（量測值超出左／右基準即視為超標）</h2>
+            <button onclick="resetStandards()" class="text-sm text-white bg-yellow-600 hover:bg-yellow-700 px-3 py-1 rounded">恢復預設基準值</button>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm text-center border" id="stdTable">
+                <thead class="bg-gray-200">
+                    <tr>
+                        <th class="p-2 border">位置</th>
+                        <th class="p-2 border">刀柄左 標準</th>
+                        <th class="p-2 border">刀柄右 標準</th>
+                        <th class="p-2 border">是否為「前端」區段</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ③ 判定規則 -->
+    <div class="mb-6 border p-4 rounded-lg">
+        <h2 class="font-bold text-blue-800 mb-2">③ 判定規則（可調）</h2>
+        <div class="grid gap-2 md:grid-cols-3">
+            <div>
+                <label class="block text-sm font-semibold mb-1">「前端」區段（位置代號，逗號分隔）</label>
+                <input type="text" id="frontZones" class="w-full p-2 border rounded" value="Q6,#17">
+                <p class="text-xs text-gray-400 mt-1">前端區段有超標 → 判為「前端剪不斷」（②表格的勾選會同步這裡）</p>
+            </div>
+            <div>
+                <label class="block text-sm font-semibold mb-1">「全刀」判定：超標位置數 ≧</label>
+                <input type="number" id="fullAllN" class="w-full p-2 border rounded" value="0" min="0" step="1">
+                <p class="text-xs text-gray-400 mt-1">0 表示「全部位置都超標」才判全刀</p>
+            </div>
+            <div>
+                <label class="block text-sm font-semibold mb-1">「剪不斷（不利）」超標數 ≧</label>
+                <input type="number" id="mildN" class="w-full p-2 border rounded" value="1" min="0" step="1">
+                <p class="text-xs text-gray-400 mt-1">未達全刀、也未在前端的超標數達到此值即判不利</p>
+            </div>
+            <div>
+                <label class="block text-sm font-semibold mb-1">超標信號定義</label>
+                <select id="ruleSignal" class="w-full p-2 border rounded bg-white">
+                    <option value="LR" selected>任一超標（左或右，現行）</option>
+                    <option value="L">僅左超標</option>
+                    <option value="R">僅右超標</option>
+                    <option value="LgtR">左疊右上：左量測 &gt; 右量測</option>
+                    <option value="RgtL">右疊左上：右量測 &gt; 左量測</option>
+                </select>
+                <p class="text-xs text-gray-400 mt-1">刀柄「左」是疊在刀柄「右」上，故加入左/右相對信號測試</p>
+            </div>
+            <div>
+                <label class="block text-sm font-semibold mb-1">「前端剪不斷」觸發：前端超標數 ≧</label>
+                <input type="number" id="frontOutK" class="w-full p-2 border rounded" value="1" min="1" step="1">
+                <p class="text-xs text-gray-400 mt-1">前端區段內超標位置數達到此值即判前端剪不斷</p>
+            </div>
+        </div>
+        <p class="text-xs text-gray-500 mt-3">判定順序：① 全部／達門檻超標 → 全刀前端剪不斷；② 前端區段超標達門檻 → 前端剪不斷；③ 其餘超標 → 剪不斷（不利）；④ 無超標 → 正常。⑥ 區可用「實際結果」自動回推上面這些參數。</p>
+    </div>
+
+    <!-- ④ 資料匯入 -->
+    <div class="mb-6 border p-4 rounded-lg">
+        <h2 class="font-bold text-blue-800 mb-2">④ 匯入量測資料</h2>
+
+        <!-- 公司 Python 直接讀取（繞過 HWY 軟體加密） -->
+        <div class="mb-4 p-4 bg-emerald-50 border border-emerald-300 rounded-lg shadow-sm">
+            <div class="flex items-center gap-2 mb-1.5">
+                <span class="text-base font-bold text-emerald-800">🐍 推薦：以公司 Python 讀取本機資料（免解密、直讀 HWY 加密檔）</span>
+            </div>
+            <p class="text-xs text-emerald-700 mb-3">公司 Python 擁有白名單權限，可直接解讀當前資料夾內的 <code>刀柄測試.csv</code> 或 <code>刀柄測試.xlsx</code>，徹底解決瀏覽器讀檔被加密阻擋的問題。</p>
+            <div class="flex flex-wrap items-center gap-2">
+                <select id="localFileSelect" class="p-2 border border-emerald-400 rounded bg-white text-sm font-semibold flex-1 md:flex-initial min-w-[220px]">
+                    <option value="刀柄測試.csv">刀柄測試.csv</option>
+                    <option value="刀柄測試.xlsx">刀柄測試.xlsx</option>
+                </select>
+                <button type="button" onclick="loadByPython()" id="pythonLoadBtn" class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2 rounded text-sm font-bold shadow transition">
+                    ⚡ 立即用 Python 載入此檔案
+                </button>
+                <button type="button" onclick="refreshLocalFiles()" class="text-xs text-emerald-800 underline px-2 py-1 hover:text-emerald-900">
+                    🔄 重新掃描目錄檔案
+                </button>
+            </div>
+        </div>
+
+        <p class="text-xs text-gray-500 mb-2">或手動選取檔案（一般未加密 CSV / TSV / xlsx）：</p>
+        <div class="flex flex-wrap items-center gap-2">
+            <input type="file" id="fileInput" accept=".csv,.txt,.tsv,.xlsx" class="w-full md:w-auto p-2 border rounded bg-gray-50 flex-1">
+            <button onclick="downloadSample()" class="text-sm bg-teal-600 text-white px-4 py-2 rounded hover:bg-teal-700">下載範例 CSV</button>
+        </div>
+        <div id="fileInfo" class="mt-2 text-sm hidden"></div>
+        <div id="importMsg" class="mt-2 text-sm font-bold hidden"></div>
+        <div class="mt-3 border-t pt-3">
+            <label class="block text-sm font-semibold mb-1">或直接貼上量測資料（從 JEV／hwy 軟體或 Excel 複製儲存格範圍貼上）</label>
+            <textarea id="pasteArea" rows="4" class="w-full p-2 border rounded font-mono text-xs" placeholder="貼上 CSV／TAB 分隔內容…　第一列需含像 Q6左 Q6右 #10左 的表頭"></textarea>
+            <button onclick="handlePaste()" class="mt-1 text-sm bg-orange-600 text-white px-4 py-2 rounded hover:bg-orange-700">解析貼上的資料</button>
+        </div>
+        <div id="rawRows" class="mt-3 hidden">
+            <div class="text-sm font-semibold mb-1">已載入 <span id="rowCount"></span> 筆組合</div>
+            <pre id="rowPreview" class="text-xs bg-gray-50 border rounded p-2 max-h-36 overflow-auto"></pre>
+        </div>
+    </div>
+
+    <button onclick="processData()" class="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-blue-700 w-full shadow-md">開始判斷分析</button>
+
+    <div id="resultOutput" class="mt-6 hidden">
+        <h2 class="font-bold text-blue-800 text-xl mb-2">⑤ 判定結果</h2>
+        <div class="flex flex-wrap gap-2 mb-4">
+            <div class="flex items-center gap-1 text-sm"><span class="sev-pill sev0">正常</span>＝皆未超標</div>
+            <div class="flex items-center gap-1 text-sm"><span class="sev-pill sev1">剪不斷（不利）</span>＝零星超標</div>
+            <div class="flex items-center gap-1 text-sm"><span class="sev-pill sev2">前端剪不斷</span>＝前端區段超標</div>
+            <div class="flex items-center gap-1 text-sm"><span class="sev-pill sev3">全刀前端剪不斷</span>＝大量／全部超標</div>
+        </div>
+        <div id="resultCards"></div>
+    </div>
+
+    <!-- ⑥ 規則回推（以實際結果找規則） -->
+    <div class="mb-6 border p-4 rounded-lg mt-6">
+        <h2 class="font-bold text-blue-800 text-xl mb-2">⑥ 規則回推：用「實際結果」找出狀態規則</h2>
+        <p class="text-xs text-gray-600 mb-3">
+            在⑤每張結果卡「實際結果」下拉選出真實判定（正常／剪不斷（不利）／前端剪不斷／全刀前端剪不斷），
+            越多筆標記越準。選好的實際結果會<b>依編號自動存回本機</b>（重整網頁或重新載入同一批資料都會自動帶回各自對應的編號）。按「開始回推規則」後，系統會窮舉下列參數組合，自動算出最能還原實際結果的規則：
+            <br>· 信號定義：任一超標／僅左／僅右／<b>左疊右上（左&gt;右）</b>／右疊左上（右&gt;左）
+            <br>· 前端區段：預設 Q6,#17／目前設定／單一位置／任兩位置／全部／無
+            <br>· 前端超標數門檻 1~2、全刀超標門檻（含「全部」）
+            <br>「關鍵差異分析」會統計各點位對各結果類別的平均值與「疊差」（Q6、#10–#17＝右Q7−右該點−左該點；Q7＝左−右），列出最能區分類別的關鍵點位與建議信號。
+        </p>
+        <div id="labeledStats" class="text-sm font-semibold mb-3"></div>
+        <div class="flex flex-wrap gap-2 mb-3">
+            <button onclick="searchRules()" class="bg-purple-700 text-white px-5 py-2 rounded text-sm font-bold hover:bg-purple-800">開始回推規則</button>
+            <button onclick="diffAnalysis()" class="bg-fuchsia-700 text-white px-5 py-2 rounded text-sm font-bold hover:bg-fuchsia-800">關鍵差異分析（各點位）</button>
+            <button onclick="clearActuals()" class="text-sm bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">清除所有實際標記</button>
+            <button onclick="downloadLabels()" class="text-sm bg-teal-600 text-white px-4 py-2 rounded hover:bg-teal-700">下載標記資料（CSV）</button>
+        </div>
+        <div id="ruleResults" class="text-sm"></div>
+        <div id="diffAnalysis" class="text-sm mt-4"></div>
+        <div class="mt-3 p-3 bg-fuchsia-50 border border-fuchsia-200 rounded">
+            <label class="block text-sm font-semibold mb-1">批次貼上實際結果（一行一筆：編號,結果），自動預設到各自對應編號</label>
+            <p class="text-xs text-gray-500 mb-1">例：<code>A-01,正常</code>　<code>D-04,全刀前端剪不斷</code>　也支援貼整份 CSV；若上傳檔本身含「實際結果」欄，匯入時就會自動帶入，不需另外輸入。<b>A1–A21 的實際結果已內建預設</b>，載入同名組合時自動帶入；此框可用來覆蓋或補其他編號。</p>
+            <textarea id="actualBulkArea" rows="4" class="w-full p-2 border rounded font-mono text-xs" placeholder="A-01,正常&#10;B-02,剪不斷（不利）&#10;C-03,前端剪不斷&#10;D-04,全刀前端剪不斷&#10;E-05,剪不斷（不利）"></textarea>
+            <button onclick="applyActualBulk()" class="mt-1 text-sm bg-fuchsia-700 text-white px-4 py-2 rounded hover:bg-fuchsia-800">批次套用實際結果</button>
+        </div>
+    </div>
+
+</div>
+
+<script>
+/* ============ 設定與基準值 ============ */
+const FIELDS = ['Q6', 'Q7', '#10', '#11', '#12', '#13', '#14', '#15', '#16', '#17'];
+const DEFAULT_STD = {
+    'Q6':  { left: 0.35, right: 2.58 },
+    'Q7':  { left: 2.17, right: 3.45 },
+    '#10': { left: 1.95, right: 2.48 },
+    '#11': { left: 2.13, right: 2.92 },
+    '#12': { left: 2.19, right: 3.22 },
+    '#13': { left: 2.10, right: 3.41 },
+    '#14': { left: 1.90, right: 3.48 },
+    '#15': { left: 1.59, right: 3.43 },
+    '#16': { left: 1.16, right: 3.28 },
+    '#17': { left: 0.61, right: 3.00 }
+};
+
+let state = { rows: [], jev: [] };   // state.rows = [{ name, data: { '#10': { left, right }, ... } }]
+
+function buildStdTable() {
+    const tbody = document.querySelector('#stdTable tbody');
+    tbody.innerHTML = '';
+    FIELDS.forEach(f => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td class="p-2 border font-bold bg-gray-50">${f}</td>
+            <td class="p-2 border"><input type="number" step="0.01" class="std-left w-24 border p-1 rounded text-center" data-field="${f}" value="${DEFAULT_STD[f].left}"></td>
+            <td class="p-2 border"><input type="number" step="0.01" class="std-right w-24 border p-1 rounded text-center" data-field="${f}" value="${DEFAULT_STD[f].right}"></td>
+            <td class="p-2 border"><input type="checkbox" class="std-front" data-field="${f}" ${f === 'Q6' || f === '#17' ? 'checked' : ''}></td>`;
+        tbody.appendChild(tr);
+    });
+}
+
+function getStandards() {
+    const std = {};
+    document.querySelectorAll('.std-left').forEach(i => {
+        std[i.dataset.field] = std[i.dataset.field] || {};
+        const v = parseFloat(i.value);
+        std[i.dataset.field].left = isNaN(v) ? null : v;
+    });
+    document.querySelectorAll('.std-right').forEach(i => {
+        std[i.dataset.field] = std[i.dataset.field] || {};
+        const v = parseFloat(i.value);
+        std[i.dataset.field].right = isNaN(v) ? null : v;
+    });
+    return std;
+}
+
+function getFrontSet() {
+    const checks = document.querySelectorAll('.std-front:checked');
+    if (checks.length > 0) {
+        return new Set([...checks].map(c => c.dataset.field));
+    }
+    const raw = document.getElementById('frontZones').value.split(/[,，、\s]+/).map(s => s.trim()).filter(Boolean);
+    return new Set(raw);
+}
+
+function syncFrontInput() {
+    const checks = document.querySelectorAll('.std-front:checked');
+    document.getElementById('frontZones').value = [...checks].map(c => c.dataset.field).join(',');
+    return false;
+}
+
+function wireFrontToZone() {
+    document.querySelectorAll('.std-front').forEach(cb => {
+        cb.addEventListener('change', syncFrontInput);
+    });
+}
+
+function resetStandards() {
+    buildStdTable();
+    wireFrontToZone();
+    document.getElementById('frontZones').value = 'Q6,#17';
+    message('已恢復預設基準值（前端區段＝Q6、#17）', 0);
+}
+
+/* ============ JEV AI API（決策模型） ============ */
+function message(text, type) {
+    const st = document.getElementById('keyStatus');
+    st.classList.remove('hidden', 'text-green-600', 'text-red-600', 'text-blue-600', 'text-yellow-600');
+    st.classList.add(type === 0 ? 'text-green-600' : type === 1 ? 'text-red-600' : type === 2 ? 'text-yellow-600' : 'text-blue-600');
+    st.innerText = text;
+}
+
+const JEV_STORAGE_KEY = 'jev_api_key_local';
+
+function initKey() {
+    try {
+        const saved = localStorage.getItem(JEV_STORAGE_KEY);
+        if (saved) document.getElementById('jevKey').value = saved;
+    } catch (e) {}
+}
+
+function toggleKeyVisibility() {
+    const input = document.getElementById('jevKey');
+    input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+function jevHeaders() {
+    const key = document.getElementById('jevKey').value.trim();
+    if (key) {
+        try { localStorage.setItem(JEV_STORAGE_KEY, key); } catch (e) {}
+    }
+    const h = { 'Content-Type': 'application/json' };
+    if (key) h['Authorization'] = 'Bearer ' + key;
+    return h;
+}
+
+async function jevSystemOne(payload) {
+    const key = document.getElementById('jevKey').value.trim();
+    if (!key) throw new Error('請先輸入 JEV 金鑰');
+    try { localStorage.setItem(JEV_STORAGE_KEY, key); } catch (e) {}
+
+    // 自動補齊官方規格必須的 model 參數
+    if (!payload.model) payload.model = 'jev-latest';
+
+    const tip = document.getElementById('proxyTip');
+    if (tip) tip.classList.add('hidden');
+
+    // 優先使用地端本機代理（同源或 localhost:3000）
+    let targetUrl = '/api/jev';
+    if (window.location.protocol === 'file:') {
+        targetUrl = 'http://localhost:3000/api/jev';
+    }
+
+    let res = null;
+    try {
+        res = await fetch(targetUrl, {
+            method: 'POST',
+            headers: jevHeaders(),
+            body: JSON.stringify(payload)
+        });
+    } catch (netErr) {
+        // 若地端代理尚未啟動，嘗試直連官方
+        try {
+            res = await fetch('https://api.typesafe.ai/v1/systemone', {
+                method: 'POST',
+                headers: jevHeaders(),
+                body: JSON.stringify(payload)
+            });
+        } catch (directErr) {
+            if (tip) tip.classList.remove('hidden');
+            throw new Error('地端服務尚未啟動（瀏覽器阻擋跨域連線）。請在資料夾中執行「啟動系統.bat」！');
+        }
+    }
+
+    let data = null;
+    try { data = await res.json(); } catch (e) {}
+
+    if (!res.ok) {
+        let msg = '';
+        if (data) {
+            if (typeof data.detail === 'string') {
+                msg = data.detail;
+            } else if (Array.isArray(data.detail)) {
+                msg = data.detail.map(d => (d.loc ? d.loc.slice(1).join('.') + ': ' : '') + d.msg).join(', ');
+            } else if (data.message) {
+                msg = data.message;
+            } else if (data.error) {
+                msg = typeof data.error === 'string' ? data.error : JSON.stringify(data.error);
+            }
+        }
+        if (!msg) msg = 'HTTP ' + res.status;
+        if (res.status === 401 || msg.includes('authentication_error')) {
+            throw new Error('401：金鑰無效或尚未開通，請確認金鑰字串是否正確');
+        }
+        if (res.status === 429) throw new Error('429：額度不足（Credits）');
+        throw new Error('JEV 回應異常：' + msg);
+    }
+    return data;
+}
+
+function extractAnswer(data) {
+    let answers = data && (data.answers || (data.data && data.data.answers));
+    if (!answers) return null;
+    if (Array.isArray(answers)) {
+        const first = answers[0];
+        return { choice: (first && (first.choice || first.result || first.value)) || null,
+                 confidence: first && (first.confidence != null ? first.confidence : null) };
+    }
+    const r = answers.result || answers.ok || Object.values(answers)[0] || null;
+    if (!r) return null;
+    let choice = r.choice != null ? r.choice : (r.value != null ? r.value : (r.selection != null ? r.selection : r.result));
+    let confidence = r.confidence != null ? r.confidence : null;
+    if (r.type === 'noul' || r.noul != null) {
+        choice = (r.noul >= 0.5 ? '是' : '否') + '（機率 ' + ((r.noul || 0) * 100).toFixed(0) + '%）';
+        confidence = r.noul;
+    }
+    return { choice, confidence };
+}
+
+function buildJevState(holder) {
+    const std = getStandards();
+    const front = getFrontSet();
+    const lines = ['刀柄組合：' + (holder.name || '未命名'), '前端區段位置：' + [...front].join(',')];
+    FIELDS.forEach(f => {
+        const s = std[f], m = holder.data[f];
+        if (!s || !m) return;
+        const mL = m.left != null ? m.left : '–';
+        const mR = m.right != null ? m.right : '–';
+        const sL = s.left != null ? s.left : '–';
+        const sR = s.right != null ? s.right : '–';
+        lines.push(f + (front.has(f) ? '（前端）' : '') + '：左 量測' + mL + '/基準' + sL + '，右 量測' + mR + '/基準' + sR);
+    });
+    return lines.join('\n');
+}
+
+const JEV_CRITERIA = {
+    '正常': '所有位置左、右量測值皆未超過基準值，可正常剪斷',
+    '剪不斷（不利）': '僅零星非前端位置超過基準值，剪斷效果偏不利',
+    '前端剪不斷': '前端區段位置有量測值超過基準值，前端無法剪斷',
+    '全刀前端剪不斷': '大量或全部位置量測值超過基準值，整支刀前端皆剪不斷'
+};
+
+async function testKey() {
+    const key = document.getElementById('jevKey').value.trim();
+    const btn = document.getElementById('testBtn');
+    if (!key) { message('請先輸入金鑰', 1); return; }
+    btn.innerText = '驗證中...';
+    try {
+        const data = await jevSystemOne({
+            model: 'jev-latest',
+            state: '測試金鑰是否有效',
+            questions: { ok: { type: 'noul', instructions: '這是連線測試嗎？' } }
+        });
+        const a = extractAnswer(data);
+        message('✔ 金鑰驗證通過！官方 JEV AI 連線正常（' + (a ? '回覆：' + a.choice : '連線正常') + '）', 0);
+    } catch (e) {
+        message('✘ 金鑰驗證失敗：' + e.message, 1);
+    }
+    btn.innerText = '測試開通狀態';
+}
+
+async function runJevJudge() {
+    const key = document.getElementById('jevKey').value.trim();
+    if (!key) { message('請先輸入 JEV 金鑰', 1); return; }
+    if (state.rows.length === 0) {
+        message('請先載入量測資料（上傳 CSV 或貼上資料）', 1);
+        alert('請先在上方「④ 匯入量測資料」載入資料，再按「用 JEV 判斷分析」。');
+        return;
+    }
+    const btn = document.getElementById('jevJudgeBtn');
+    const oldText = btn.innerText;
+    state.jev = state.rows.map(() => null);
+    let failCount = 0;
+    for (let i = 0; i < state.rows.length; i++) {
+        btn.innerText = 'JEV 判斷中 ' + (i + 1) + '/' + state.rows.length + ' …';
+        try {
+            const data = await jevSystemOne({
+                model: 'jev-latest',
+                state: buildJevState(state.rows[i]),
+                questions: { result: { type: 'choice', instructions: '依各位置量測值是否超過基準值，判斷此刀柄組合最可能屬於哪一類剪斷結果', criteria: { ...JEV_CRITERIA } } }
+            });
+            state.jev[i] = extractAnswer(data);
+            message('✔ ' + (i + 1) + '/' + state.rows.length + ' 完成：' + ((state.jev[i] && state.jev[i].choice) || '未取得內容'), 0);
+        } catch (e) {
+            state.jev[i] = { error: e.message };
+            failCount++;
+            message('✘ 第 ' + (i + 1) + ' 筆（' + state.rows[i].name + '）失敗：' + e.message, 1);
+            break;
+        }
+        await new Promise(r => setTimeout(r, 150));
+    }
+    btn.innerText = oldText;
+    if (failCount > 0) {
+        alert('JEV 判斷中斷：仍有 ' + failCount + ' 筆失敗（詳細見上方訊息）。已完成的筆數仍會顯示在結果。');
+        return;
+    }
+    message('✔ 全部 ' + state.rows.length + ' 筆已完成 JEV 判斷，可點按「開始判斷分析」看結果', 0);
+}
+
+/* ============ CSV / 檔案匯入 ============ */
+function parseDelimited(text) {
+    // 判斷分隔符（英文逗號 / 全形逗號 / Tab），以出現次數最多者為準
+    const counts = { ',': 0, '，': 0, '\t': 0 };
+    text.split(/\r?\n/).slice(0, 30).forEach(l => {
+        counts[','] += (l.match(/,/g) || []).length;
+        counts['，'] += (l.match(/，/g) || []).length;
+        counts['\t'] += (l.match(/\t/g) || []).length;
+    });
+    let delim = ',';
+    let maxN = 0;
+    Object.keys(counts).forEach(d => { if (counts[d] > maxN) { maxN = counts[d]; delim = d; } });
+
+    // RFC4180 引號處理："" 為跳脫、欄位內可含逗號/換行
+    const rows = [];
+    let row = [], field = '', inQ = false;
+    for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (inQ) {
+            if (c === '"') {
+                if (text[i + 1] === '"') { field += '"'; i++; }
+                else inQ = false;
+            } else field += c;
+        } else {
+            if (c === '"') inQ = true;
+            else if (c === delim) { row.push(field.trim()); field = ''; }
+            else if (c === '\n') { row.push(field.trim()); if (row.some(x => x !== '')) rows.push(row); row = []; field = ''; }
+            else if (c === '\r') { /* skip */ }
+            else field += c;
+        }
+    }
+    // 結尾殘留欄位
+    if (field !== '' || row.length > 0) { row.push(field.trim()); if (row.some(x => x !== '')) rows.push(row); }
+    return rows;
+}
+
+async function parseFile(file) {
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    if (ext === 'xlsx') {
+        if (typeof XLSX === 'undefined') {
+            await new Promise((res, rej) => {
+                const s = document.createElement('script');
+                s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+                s.onload = res; s.onerror = () => rej(new Error('無法載入 xlsx 解析程式'));
+                document.head.appendChild(s);
+            });
+        }
+        const buf = await file.arrayBuffer();
+        const head = new TextDecoder('ascii').decode(buf.slice(0, 1024));
+        if (head.includes('hwy.com.tw')) throw new Error('此檔案被 hwy.com.tw 軟體加密');
+        const wb = XLSX.read(buf, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const arr = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+        const rows = arr.map(r => r.map(c => String(c).trim()));
+        return rows.filter(r => r.some(x => x !== ''));
+    }
+    const text = await file.text();
+    if (text.includes('hwy.com.tw')) throw new Error('此檔案被 hwy.com.tw 軟體加密');
+    return parseDelimited(text);
+}
+
+function normalizeRows(arr) {
+    // arr: array of objects with arbitrary keys → map to { name, data, actual }
+    const keyMap = {};
+    arr.forEach(obj => {
+        Object.keys(obj).forEach(k => {
+            const norm = normalizeField(k);
+            if (norm) keyMap[norm] = k;
+        });
+    });
+    return arr.map(obj => {
+        const data = {};
+        let name = '';
+        let actual;
+        FIELDS.forEach(f => {
+            const lk = (keyMap[f + ':L']) || keyMap[f + '左'];
+            const rk = (keyMap[f + ':R']) || keyMap[f + '右'];
+            if (lk && obj[lk] !== undefined && obj[lk] !== '') data[f] = { left: toNum(obj[lk]) };
+            if (rk && obj[rk] !== undefined && obj[rk] !== '') data[f] = data[f] || {}, data[f].right = toNum(obj[rk]);
+        });
+        // 實際結果欄（判定／結果／實際…）自動辨識
+        Object.keys(obj).forEach(k => {
+            if (/實際|判定|結果|等級/.test(k) && actual == null) actual = parseLevelText(obj[k]);
+        });
+        // 名稱：非位置欄位、且非「實際結果」欄之第一欄
+        Object.keys(obj).forEach(k => {
+            if (!normalizeField(k) && !/實際|判定|結果|等級/.test(k) && !name) name = String(obj[k]);
+        });
+        return { name: name || '', data, ...(actual != null ? { actual } : {}) };
+    }).filter(r => Object.keys(r.data).length > 0);
+}
+
+function parseUsageCSV(matrix) {
+    // ① 檢查表頭是否含 Q6 / #10 等位置名稱 → 欄位對應
+    if (matrix.length === 0) return [];
+    const header = matrix[0].map(s => String(s).trim());
+    const colMap = {};
+    header.forEach((h, idx) => {
+        const norm = normalizeField(h);
+        if (norm) colMap[idx] = norm;
+    });
+    const hasHeader = Object.keys(colMap).length > 1;
+    const dataRows = hasHeader ? matrix.slice(1) : matrix;
+
+    // 找出「實際結果」相關欄位（自動辨識等級）
+    const resultColIdx = [];
+    if (hasHeader) {
+        header.forEach((h, idx) => {
+            if (/實際|判定|結果|等級/.test(h) && !normalizeField(h)) resultColIdx.push(idx);
+        });
+    }
+
+    return dataRows.map(row => {
+        const cells = row.map(s => String(s).trim());
+        const data = {};
+        let name = '';
+        let actual;
+        if (hasHeader) {
+            Object.keys(colMap).forEach(idx => {
+                const k = colMap[idx];
+                const f = k.split(':')[0];
+                const val = cells[idx];
+                if (val !== '' && val !== undefined) {
+                    const side = k.endsWith(':L') ? 'left' : 'right';
+                    data[f] = data[f] || {};
+                    data[f][side] = toNum(val);
+                }
+            });
+            // 名稱：表頭中非位置欄位、且非「實際結果」欄的第一個非空欄位
+            header.forEach((h, idx) => {
+                if (!normalizeField(h) && resultColIdx.indexOf(idx) < 0 && !name && cells[idx] !== '') name = cells[idx];
+            });
+            // 實際結果自動帶入
+            resultColIdx.forEach(idx => {
+                if (actual == null) actual = parseLevelText(cells[idx]);
+            });
+        } else {
+            // 無表頭：第一欄名稱，其餘依序 Q6左,Q6右,Q7左,Q7右...
+            name = cells[0] || '';
+            let p = 1;
+            for (const f of FIELDS) {
+                if (p < cells.length && cells[p] !== '') { data[f] = data[f] || {}; data[f].left = toNum(cells[p]); }
+                p++;
+                if (p < cells.length && cells[p] !== '') { data[f] = data[f] || {}; data[f].right = toNum(cells[p]); }
+                p++;
+            }
+        }
+        return { name, data, ...(actual != null ? { actual } : {}) };
+    }).filter(r => Object.keys(r.data).length > 0);
+}
+
+function normalizeField(h) {
+    const t = String(h).trim();
+    let side = '';
+    if (/左|L/i.test(t) && !/右/.test(t)) side = ':L';
+    else if (/右|R/i.test(t)) side = ':R';
+    for (const f of FIELDS) {
+        if (t === f || t.startsWith(f) || t.indexOf(f) >= 0) return f + side;
+    }
+    return null;
+}
+
+function toNum(v) {
+    const n = parseFloat(String(v).replace(/,/g, ''));
+    return isNaN(n) ? null : n;
+}
+
+/* 把「實際結果」文字轉等級 0~3（看不懂回 null） */
+function parseLevelText(v) {
+    const t = String(v == null ? '' : v).trim();
+    if (!t) return null;
+    if (/^\d+$/.test(t)) { const n = parseInt(t, 10); return (n >= 0 && n <= 3) ? n : null; }
+    if (t.indexOf('全刀') >= 0) return 3;
+    if (t.indexOf('前端') >= 0) return 2;
+    if (t.indexOf('剪') >= 0) return 1;
+    if (t.indexOf('正常') >= 0) return 0;
+    return null;
+}
+
+async function handleFile() {
+    const f = document.getElementById('fileInput').files[0];
+    if (!f) { message('請先選擇檔案', 1); return; }
+    try {
+        const lines = await parseFile(f);
+        state.rows = restoreActuals(parseUsageCSV(lines));
+        if (state.rows.length === 0) throw new Error('解析不到資料');
+        importMsg('✔ 已載入 ' + state.rows.length + ' 筆組合（' + f.name + '），可直接開始判斷分析', 0);
+        showRaw();
+        document.getElementById('fileInfo').classList.remove('hidden');
+        document.getElementById('fileInfo').innerText = '已選取檔案：' + f.name;
+    } catch (e) {
+        if (e.message.includes('hwy.com.tw')) {
+            importMsg('✘ 此檔案（' + f.name + '）仍被 hwy.com.tw 軟體加密，不是可讀的 CSV。請將資料「複製貼上」到上方文字框，或改用 JEV API 抓取。', 1);
+        } else {
+            importMsg('✘ 檔案解析失敗：' + e.message, 1);
+        }
+    }
+}
+
+function importMsg(text, type) {
+    const el = document.getElementById('importMsg');
+    el.classList.remove('hidden', 'text-green-600', 'text-red-600');
+    el.classList.add(type === 0 ? 'text-green-600' : 'text-red-600');
+    el.innerText = text;
+}
+
+function handlePaste() {
+    const text = document.getElementById('pasteArea').value.trim();
+    if (!text) { importMsg('✘ 請先在文字框貼上資料', 1); return; }
+    if (text.includes('hwy.com.tw')) { importMsg('✘ 貼上的內容看起來仍是加密檔，請從軟體畫面「複製」正常顯示的資料再貼。', 1); return; }
+    try {
+        const rows = restoreActuals(parseUsageCSV(parseDelimited(text)));
+        if (rows.length === 0) throw new Error('解析不到資料');
+        state.rows = rows;
+        importMsg('✔ 已載入 ' + rows.length + ' 筆組合（含先前存的實際結果），可直接開始判斷分析', 0);
+        showRaw();
+    } catch (e) {
+        importMsg('✘ 貼上內容解析失敗：' + e.message + '。請確認第一列是表頭（含 Q6左、Q6右、#10左…），用逗號或 Tab 分隔。', 1);
+    }
+}
+
+/* ============ 公司 Python 本機讀取 ============ */
+async function refreshLocalFiles() {
+    try {
+        let ep = '/api/list-local-files';
+        if (window.location.protocol === 'file:') ep = 'http://localhost:3000/api/list-local-files';
+        const res = await fetch(ep);
+        if (res.ok) {
+            const data = await res.json();
+            const sel = document.getElementById('localFileSelect');
+            if (data.files && data.files.length > 0) {
+                sel.innerHTML = '';
+                data.files.forEach(f => {
+                    const opt = document.createElement('option');
+                    opt.value = f;
+                    opt.innerText = f;
+                    sel.appendChild(opt);
+                });
+            }
+        }
+    } catch (e) {}
+}
+
+async function loadByPython() {
+    const sel = document.getElementById('localFileSelect');
+    const filename = sel.value;
+    const btn = document.getElementById('pythonLoadBtn');
+    const oldText = btn.innerText;
+    btn.innerText = '讀取解析中...';
+    try {
+        let ep = '/api/read-local-file';
+        if (window.location.protocol === 'file:') ep = 'http://localhost:3000/api/read-local-file';
+        const res = await fetch(ep, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename })
+        });
+        const result = await res.json();
+        if (!result.success) {
+            throw new Error(result.error || '讀取失敗');
+        }
+        state.rows = restoreActuals(result.rows);
+        importMsg('✔ 成功由公司 Python 讀取並解讀載入 ' + result.count + ' 筆刀柄組合（' + filename + '，含先前存的實際結果）！可直接點按下方開始分析。', 0);
+        showRaw();
+        document.getElementById('fileInfo').classList.remove('hidden');
+        document.getElementById('fileInfo').innerText = '由 Python 載入：' + filename + '（共 ' + result.count + ' 筆）';
+    } catch (e) {
+        importMsg('✘ Python 讀取失敗：' + e.message + '。請確認已執行「啟動系統.bat」以開啟 Python 地端伺服器。', 1);
+    } finally {
+        btn.innerText = oldText;
+    }
+}
+
+function showRaw() {
+    const box = document.getElementById('rawRows');
+    box.classList.remove('hidden');
+    document.getElementById('rowCount').innerText = state.rows.length;
+    document.getElementById('rowPreview').innerText = state.rows.slice(0, 5).map(r =>
+        r.name + ' | ' + FIELDS.filter(f => r.data[f] && (r.data[f].left != null || r.data[f].right != null))
+            .map(f => f + '(' + (r.data[f].left ?? '-') + '/' + (r.data[f].right ?? '-') + ')').join(' ')
+    ).join('\n') + (state.rows.length > 5 ? '\n...' : '');
+}
+
+/* ============ 判定邏輯 ============ */
+const SIGNALS = {
+    'LR':   { label: '任一超標（左或右）', on: d => d.lOut || d.rOut },
+    'L':    { label: '僅左超標', on: d => d.lOut },
+    'R':    { label: '僅右超標', on: d => d.rOut },
+    'LgtR': { label: '左疊右上（左量測>右量測）', on: d => d.mLeft != null && d.mRight != null && d.mLeft > d.mRight },
+    'RgtL': { label: '右疊左上（右量測>左量測）', on: d => d.mRight != null && d.mLeft != null && d.mRight > d.mLeft }
+};
+
+function getSignalDef() {
+    const el = document.getElementById('ruleSignal');
+    const v = el && el.value || 'LR';
+    return SIGNALS[v] ? v : 'LR';
+}
+
+/* 純函式：依信號與基準值算出每個位置的超標細節（不含 DOM／門檻） */
+function buildOutDetails(holder, std, signalKey) {
+    const sig = SIGNALS[signalKey] || SIGNALS.LR;
+    const details = [];
+    for (const f of FIELDS) {
+        const s = std[f];
+        const m = holder.data[f];
+        if (!s || (s.left == null && s.right == null)) continue;
+        if (!m || (m.left == null && m.right == null)) continue;
+        const lStd = s.left == null ? Infinity : s.left;
+        const rStd = s.right == null ? Infinity : s.right;
+        const lOut = m.left != null && (m.left > lStd);
+        const rOut = m.right != null && (m.right > rStd);
+        const out = !!sig.on({ lOut, rOut, mLeft: m.left, mRight: m.right });
+        details.push({ f, mLeft: m.left, mRight: m.right, lStd: s.left, rStd: s.right, lOut, rOut, out });
+    }
+    return details;
+}
+
+/* 純函式：由統計量算出等級（0 正常 / 1 不利 / 2 前端 / 3 全刀） */
+function classifyCounts(totalOut, totalChecked, frontOut, fullAllN, mildN, frontOutK) {
+    const mild = Math.max(0, parseInt(mildN, 10) || 0);
+    const fullLevel = (fullAllN === 0) ? totalChecked : Math.max(1, parseInt(fullAllN, 10) || 1);
+    const fK = Math.max(1, parseInt(frontOutK, 10) || 1);
+    if (totalOut === 0) return 0;
+    if (totalOut >= fullLevel) return 3;
+    if (frontOut >= fK) return 2;
+    if (totalOut >= mild) return 1;
+    return 0;
+}
+
+const LEVEL_LABEL = ['正常', '剪不斷（不利）', '前端剪不斷', '全刀前端剪不斷'];
+
+function judge(holder) {
+    const std = getStandards();
+    const signalKey = getSignalDef();
+    const details = buildOutDetails(holder, std, signalKey);
+    const front = getFrontSet();
+    details.forEach(d => { d.front = front.has(d.f); });
+
+    const totalChecked = details.length;
+    const totalOut = details.filter(d => d.out).length;
+    const frontOut = details.filter(d => d.out && front.has(d.f)).length;
+    const fullAllN = parseInt(document.getElementById('fullAllN').value, 10) || 0;
+    const mildN = parseInt(document.getElementById('mildN').value, 10) || 0;
+    const frontOutK = parseInt(document.getElementById('frontOutK').value, 10) || 1;
+    const level = classifyCounts(totalOut, totalChecked, frontOut, fullAllN, mildN, frontOutK);
+    const label = LEVEL_LABEL[level];
+
+    // 最大超出率（基準值比較，用於說明嚴重度）
+    let maxExceed = 0;
+    details.forEach(d => {
+        if (d.lOut && d.lStd > 0) maxExceed = Math.max(maxExceed, (d.mLeft - d.lStd) / d.lStd);
+        if (d.rOut && d.rStd > 0) maxExceed = Math.max(maxExceed, (d.mRight - d.rStd) / d.rStd);
+    });
+
+    return { details, totalOut, frontOut, totalChecked, level, label, maxExceed: maxExceed * 100 };
+}
+
+function processData() {
+    if (state.rows.length === 0) {
+        message('請先匯入量測資料（CSV 或 JEV 抓取）', 1);
+        alert('目前尚無任何量測資料。請先：\n1) 上傳未加密 CSV；或點「下載範例 CSV」測流程；或\n2) 把 JEV／Excel 的資料複製貼到上方文字框後按「解析貼上的資料」；\n3) 載入成功後可按「用 JEV 判斷分析」取得 AI 判定。');
+        return;
+    }
+    const out = document.getElementById('resultOutput');
+    out.classList.remove('hidden');
+    const cards = document.getElementById('resultCards');
+    cards.innerHTML = '';
+
+    const results = state.rows.map((r, idx) => ({ idx, holder: r, result: judge(r) }));
+    // 依組合編號 A1~A21 自然排序（數值序，避免 A10 排到 A2 前面）
+    function nameSortKey(nm) {
+        const m = String(nm || '').match(/^([A-Za-z]*)[\s\-_——]*(\d+)/);
+        if (!m) return ['~' + String(nm || '').toLowerCase(), 0, String(nm || '').toLowerCase()];
+        return [m[1].toLowerCase(), parseInt(m[2], 10), m[0].toLowerCase()];
+    }
+    results.sort((a, b) => {
+        const ka = nameSortKey(a.holder.name), kb = nameSortKey(b.holder.name);
+        if (ka[0] !== kb[0]) return ka[0] < kb[0] ? -1 : 1;
+        if (ka[1] !== kb[1]) return ka[1] - kb[1];
+        return ka[2] < kb[2] ? -1 : ka[2] > kb[2] ? 1 : 0;
+    });
+
+    const sevCls = ['sev0', 'sev1', 'sev2', 'sev3'];
+    const sevBorder = ['border-green-300', 'border-yellow-400', 'border-red-400', 'border-red-600'];
+    const front = getFrontSet();
+
+    results.forEach((r, i) => {
+        const res = r.result;
+        const jv = state.jev ? state.jev[r.idx] : null;
+        let jvHtml = jv ? (jv.error
+            ? `<span class="sev-pill border border-red-300 text-red-700">JEV失敗：${jv.error}</span>`
+            : `<span class="sev-pill border border-indigo-300 text-indigo-700">JEV判定：${jv.choice || '未取得內容'}` +
+              (jv.confidence != null ? `（信心 ${(jv.confidence * 100).toFixed(0)}%）` : '') + `</span>`)
+            : `<span class="sev-pill border border-gray-300 text-gray-500">JEV：未判斷</span>`;
+
+        let detailHtml = '';
+        res.details.forEach(d => {
+            const cls = d.lOut && d.rOut ? 'cell-out-both' : d.lOut ? 'cell-out-l' : d.rOut ? 'cell-out-r' : 'cell-ok';
+            const s = d.lOut ? (d.mLeft + ' ⚠').replace('⚠', '↑') : (d.mLeft ?? '–');
+            const rv = d.rOut ? (d.mRight + '↑') : (d.mRight ?? '–');
+            detailHtml += `<tr>
+                <td class="p-1 border text-center font-semibold">${d.f}${d.front ? ' <span class="text-xs text-blue-500">（前端）</span>' : ''}</td>
+                <td class="p-1 border text-center ${d.lOut ? 'text-red-600 font-bold' : ''}">${s}<span class="text-gray-400 text-xs">/${d.lStd}</span></td>
+                <td class="p-1 border text-center ${d.rOut ? 'text-red-600 font-bold' : ''}">${rv}<span class="text-gray-400 text-xs">/${d.rStd}</span></td>
+                <td class="p-1 border text-center ${cls}">${d.out ? '超標' : 'OK'}</td>
+            </tr>`;
+        });
+
+        cards.innerHTML += `
+            <div class="border-2 ${sevBorder[res.level]} rounded-lg p-3 mb-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div class="font-bold text-lg">${i + 1}. ${r.holder.name || '（未命名組合）'}</div>
+                    <div class="flex flex-wrap gap-1">
+                        <span class="sev-pill ${sevCls[res.level]}">${res.label}</span>${jvHtml}
+                    </div>
+                </div>
+                <div class="text-xs text-gray-500 mt-1">
+                    超標位置 ${res.totalOut}/${res.totalChecked}，前端區段超標 ${res.frontOut}，
+                    最大超出率 ${res.maxExceed.toFixed(1)}%，信號＝${SIGNALS[getSignalDef()].label}
+                </div>
+                <div class="mt-1 flex flex-wrap items-center gap-2 text-sm">
+                    <label class="font-semibold">實際結果：</label>
+                    <select onchange="setActual(${r.idx}, this.value)" class="p-1 border rounded bg-white">
+                        ${actualOptionsHtml(state.rows[r.idx].actual)}
+                    </select>
+                    <span class="text-xs text-gray-400">選真實判定，供⑥回推規則使用</span>
+                </div>
+                <div class="overflow-x-auto mt-2">
+                    <table class="w-full text-sm border text-center">
+                        <thead class="bg-gray-200">
+                            <tr>
+                                <th class="p-1 border">位置</th>
+                                <th class="p-1 border">左（量測/基準）</th>
+                                <th class="p-1 border">右（量測/基準）</th>
+                                <th class="p-1 border">狀態</th>
+                            </tr>
+                        </thead>
+                        <tbody>${detailHtml}</tbody>
+                    </table>
+                </div>
+                <div class="overflow-x-auto mt-2">
+                    <table class="w-full text-xs border text-center whitespace-nowrap">
+                        <thead class="bg-fuchsia-100">
+                            <tr><th class="p-1 border">左右疊差</th>
+                        ${FIELDS.map(f => '<th class="p-1 border">' + (front.has(f) ? '<span class="text-blue-700">' + f + '*</span>' : f) + '</th>').join('')}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td class="p-1 border font-semibold">數值</td>
+                        ${FIELDS.map(f => {
+                            const g = stackGapVal(r.holder, f);
+                            let s = '–', cls = 'text-gray-400';
+                            if (g != null) {
+                                s = (g >= 0 ? '+' : '−') + Math.abs(g).toFixed(2);
+                                if (g >= 0.3) cls = 'text-red-600 font-bold';
+                                else if (g <= -0.3) cls = 'text-blue-700 font-bold';
+                            }
+                            return '<td class="p-1 border text-center ' + cls + '">' + s + '</td>';
+                        }).join('')}
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div class="text-xs text-gray-400 mt-1">左右疊差（左刀疊右）：藍色位置名＝前端區段；Q6、#10–#17 疊差＝右Q7−右該點−左該點；Q7＝左−右。正值（紅）＝左刀較高，負值（藍）＝右刀較高（|疊差|≧0.3 標色）。</div>
+                </div>
+            </div>`;
+    });
+}
+
+/* ============ 實際結果標記與規則回推 ============ */
+function actualOptionsHtml(selIdx) {
+    let h = '<option value="">（未標記）</option>';
+    LEVEL_LABEL.forEach((w, lv) => {
+        h += `<option value="${lv}" ${lv === selIdx ? 'selected' : ''}>${w}</option>`;
+    });
+    return h;
+}
+
+function setActual(idx, val) {
+    if (!state.rows[idx]) return;
+    state.rows[idx].actual = val === '' ? undefined : parseInt(val, 10);
+    saveActuals();
+    updateLabeledStats();
+}
+
+/* 實際結果會依「編號（刀柄組合名稱）／列序」存到本機 localStorage，
+   重新載入資料或重整網頁時自動恢復到各自對應的編號上。 */
+const ACTUAL_STORE_KEY = 'jev_daobing_actuals_v1';
+function storageGet(key) {
+    try { return typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null; } catch (e) { return null; }
+}
+function storageSet(key, val) {
+    try { if (typeof localStorage !== 'undefined') localStorage.setItem(key, val); } catch (e) {}
+}
+function idKey(row, i) {
+    return (row && row.name ? row.name : '#row' + (i + 1));
+}
+function saveActuals() {
+    const m = {};
+    state.rows.forEach((r, i) => { if (r.actual != null) m[idKey(r, i)] = r.actual; });
+    storageSet(ACTUAL_STORE_KEY, JSON.stringify(m));
+}
+
+/* 內建實際結果預設（A1–A21）：載入同名組合時自動帶入，不需重複輸入。
+   全刀前端剪不斷=3、前端剪不斷=2、剪不斷（不利）=1。 */
+const DEFAULT_ACTUALS = {
+    A1: 3, A2: 3, A3: 3,
+    A4: 2, A5: 2, A6: 2, A7: 2, A8: 2, A9: 2, A10: 2, A11: 2, A12: 2, A13: 2,
+    A14: 3,
+    A15: 1, A16: 1, A17: 1, A18: 1, A19: 1, A20: 1, A21: 1
+};
+const DEFAULT_ACTUALS_LIST = [3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 1, 1, 1, 1, 1, 1, 1];
+function presetActual(row, i) {
+    const name = String(row.name || '').trim();
+    if (name) {
+        if (DEFAULT_ACTUALS.hasOwnProperty(name)) return DEFAULT_ACTUALS[name];
+        const hit = Object.keys(DEFAULT_ACTUALS).find(k =>
+            name.length > k.length && name.indexOf(k) === 0 && !/[A-Z0-9]/.test(name.charAt(k.length)));
+        return hit != null ? DEFAULT_ACTUALS[hit] : null;
+    }
+    return i < DEFAULT_ACTUALS_LIST.length ? DEFAULT_ACTUALS_LIST[i] : null;
+}
+const ACTUAL_CLEARED_KEY = 'jev_daobing_actuals_cleared_v1';
+function clearedKeys() {
+    try { const raw = storageGet(ACTUAL_CLEARED_KEY); return raw ? JSON.parse(raw) : []; } catch (e) { return []; }
+}
+
+function restoreActuals(rows) {
+    let m = {};
+    try { const raw = storageGet(ACTUAL_STORE_KEY); m = raw ? JSON.parse(raw) : {}; } catch (e) { m = {}; }
+    const cleared = clearedKeys();
+    rows.forEach((r, i) => {
+        if (r.actual == null) {
+            const key = idKey(r, i);
+            if (m[key] != null) r.actual = m[key];
+            else if (cleared.indexOf(key) < 0) {
+                const d = presetActual(r, i);
+                if (d != null) r.actual = d;
+            }
+        }
+    });
+    return rows;
+}
+
+function clearActuals() {
+    const cleared = clearedKeys();
+    state.rows.forEach((r, i) => { r.actual = undefined; cleared.push(idKey(r, i)); });
+    storageSet(ACTUAL_STORE_KEY, '{}');
+    storageSet(ACTUAL_CLEARED_KEY, JSON.stringify(cleared));
+    if (state.rows.length) {
+        message('已清除所有實際標記（內建 A1–A21 預設亦暫停帶出，可在⑤改為手動標記）', 0);
+        processData();
+    }
+}
+
+function applyActualBulk() {
+    const el = document.getElementById('actualBulkArea');
+    const lines = (el.value || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (!lines.length) { message('請先在上方貼上「編號,結果」清單', 1); return; }
+    let n = 0, bad = [];
+    lines.forEach(line => {
+        const parts = line.split(/[,，\t]+/).map(s => s.trim());
+        const key = parts[0];
+        const lv = parseLevelText(parts.length > 1 ? parts[1] : '');
+        if (lv == null) { bad.push(key || line); return; }
+        let row = state.rows.find(r => r.name === key);
+        if (!row) row = state.rows.find(r => r.name && r.name.indexOf(key) === 0);
+        if (!row) {
+            const ix = parseInt(key, 10) - 1;
+            if (state.rows[ix]) row = state.rows[ix];
+        }
+        if (!row) { bad.push(key); return; }
+        row.actual = lv;
+        n++;
+    });
+    saveActuals();
+    updateLabeledStats();
+    if (state.rows.length) processData();
+    message('✔ 批次套用 ' + n + ' 筆實際結果'
+        + (bad.length ? '；無法對應/辨識 ' + bad.length + ' 筆：' + bad.slice(0, 5).join('、') : ''),
+        bad.length ? 1 : 0);
+}
+
+function actualList() {
+    return state.rows.map((r, i) => ({ idx: i, row: r, level: r.actual })).filter(x => x.level != null);
+}
+
+function updateLabeledStats() {
+    const el = document.getElementById('labeledStats');
+    if (!el) return;
+    const all = state.rows;
+    if (all.length === 0) { el.innerHTML = '尚未載入資料'; return; }
+    const labeled = all.filter(r => r.actual != null);
+    const cnt = [0, 0, 0, 0];
+    labeled.forEach(r => cnt[r.actual]++);
+    el.innerHTML = `已載入 ${all.length} 筆，已標記實際結果 ${labeled.length}/${all.length} 筆`
+        + (labeled.length ? `（正常 ${cnt[0]}、不利 ${cnt[1]}、前端 ${cnt[2]}、全刀 ${cnt[3]}）` : '');
+}
+
+function candidateFrontSets(curSet) {
+    const sets = [];
+    const add = s => {
+        if (!s.size) return;
+        if (sets.some(x => x.size === s.size && [...s].every(v => x.has(v)))) return;
+        sets.push(new Set(s));
+    };
+    add(new Set(['Q6', '#17']));
+    if (curSet.size) add(new Set(curSet));
+    add(new Set(FIELDS));
+    FIELDS.forEach(f => add(new Set([f])));
+    for (let i = 0; i < FIELDS.length; i++)
+        for (let j = i + 1; j < FIELDS.length; j++)
+            add(new Set([FIELDS[i], FIELDS[j]]));
+    return sets;
+}
+
+function evaluateConfig(labeled, signalKey, frontSet, frontOutK, fullAllN) {
+    const std = getStandards();
+    let correct = 0;
+    labeled.forEach(x => {
+        const dets = buildOutDetails(x.row, std, signalKey);
+        const totalOut = dets.filter(d => d.out).length;
+        const frontOut = dets.filter(d => d.out && frontSet.has(d.f)).length;
+        const lv = classifyCounts(totalOut, dets.length, frontOut, fullAllN, 1, frontOutK);
+        if (lv === x.level) correct++;
+    });
+    return labeled.length ? correct / labeled.length : 0;
+}
+
+function searchRules() {
+    const labeled = actualList();
+    const el = document.getElementById('ruleResults');
+    if (labeled.length < 3) {
+        el.innerHTML = `<div class="text-red-600 font-bold">實際結果標記不足（至少 3 筆），目前只有 ${labeled.length} 筆。</div>`;
+        return;
+    }
+    const curFront = getFrontSet();
+    const curSignal = getSignalDef();
+    const curFull = parseInt(document.getElementById('fullAllN').value, 10) || 0;
+    const curFrontK = parseInt(document.getElementById('frontOutK').value, 10) || 1;
+    const curKey = curSignal + '\u0001' + [...curFront].sort().join(',') + '\u0001' + curFrontK + '\u0001' + curFull;
+
+    const keyOf = c => c.sig + '\u0001' + [...c.fs].sort().join(',') + '\u0001' + c.fK + '\u0001' + c.full;
+
+    const results = [];
+    const sets = candidateFrontSets(curFront);
+    Object.keys(SIGNALS).forEach(sig => {
+        sets.forEach(fs => {
+            [1, 2].forEach(fK => {
+                [0, 1, 2, 3].forEach(full => {
+                    results.push({ sig, fs, fK, full, acc: evaluateConfig(labeled, sig, fs, fK, full) });
+                });
+            });
+        });
+    });
+    results.sort((a, b) => b.acc - a.acc
+        || ((keyOf(a) === curKey ? -1 : 1) - (keyOf(b) === curKey ? -1 : 1))
+        || (a.fK - b.fK)
+        || (a.full - b.full)
+        || keyOf(a).localeCompare(keyOf(b)));
+
+    const top = results.slice(0, 10);
+    const best = top[0];
+    let h = `<div class="mb-2 font-bold">共掃描 ${results.length} 組參數組合。最佳規則（準確率 ${Math.round(best.acc * 100)}%）：</div>`;
+    h += '<table class="w-full text-sm border text-center mb-4"><thead class="bg-purple-100">';
+    h += '<tr><th class="p-1 border">準確率</th><th class="p-1 border">信號</th><th class="p-1 border">前端區段</th><th class="p-1 border">前端門檻</th><th class="p-1 border">全刀門檻</th><th class="p-1 border">套用</th></tr></thead><tbody>';
+    top.forEach((c, i) => {
+        const isBest = i === 0 && c.acc === best.acc;
+        h += `<tr class="${isBest ? 'bg-purple-50' : ''}">
+            <td class="p-1 border font-bold ${Math.round(c.acc * 100) >= 80 ? 'text-green-700' : Math.round(c.acc * 100) >= 50 ? 'text-yellow-700' : 'text-red-600'}">${Math.round(c.acc * 100)}%</td>
+            <td class="p-1 border">${SIGNALS[c.sig].label}</td>
+            <td class="p-1 border">${[...c.fs].sort().join('、')}</td>
+            <td class="p-1 border">≥ ${c.fK}</td>
+            <td class="p-1 border">${c.full === 0 ? '全部' : '≥ ' + c.full}</td>
+            <td class="p-1 border"><button onclick="applyRule('${c.sig}', '${[...c.fs].sort().join(',')}', ${c.fK}, ${c.full})" class="text-xs bg-purple-600 text-white px-2 py-1 rounded hover:bg-purple-700">套用</button></td>
+        </tr>`;
+    });
+    h += '</tbody></table>';
+    h += '<p class="text-xs text-gray-500">平手時傾向目前的③設定與較簡單的門檻。挑選「套用」後會更新③的規則設定並重新判斷。</p>';
+    el.innerHTML = h;
+}
+
+function applyFrontToChecks(set) {
+    const boxes = document.querySelectorAll('.std-front');
+    boxes.forEach(cb => { cb.checked = set.has(cb.dataset.field); });
+    const el = document.getElementById('frontZones');
+    if (el) el.value = [...set].join(',');
+}
+
+function applyRule(sig, fsStr, fK, full) {
+    const fs = new Set(fsStr.split(',').filter(Boolean));
+    const rs = document.getElementById('ruleSignal');
+    if (rs) rs.value = sig;
+    const fk = document.getElementById('frontOutK');
+    if (fk) fk.value = fK;
+    const fa = document.getElementById('fullAllN');
+    if (fa) fa.value = full;
+    const mn = document.getElementById('mildN');
+    if (mn) mn.value = 1;
+    applyFrontToChecks(fs);
+    message('已套用回推規則（信號 ' + SIGNALS[sig].label + '，前端 ' + [...fs].sort().join('、') + '）', 0);
+    processData();
+}
+
+function triggerDownload(filename, text) {
+    const blob = new Blob(['\uFEFF' + text], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+}
+
+function downloadLabels() {
+    if (!state.rows.length) { alert('尚未載入任何量測資料'); return; }
+    const header = ['刀柄組合', ...FIELDS.flatMap(f => [f + '左', f + '右']), '預測等級', '實際等級', '差異'];
+    const lines = [header.join(',')];
+    state.rows.forEach(r => {
+        const j = judge(r);
+        const cell = v => v == null ? '' : v;
+        lines.push([
+            r.name || '',
+            ...FIELDS.flatMap(f => { const d = r.data[f] || {}; return [cell(d.left), cell(d.right)]; }),
+            j.label,
+            r.actual != null ? LEVEL_LABEL[r.actual] : '',
+            r.actual != null ? (r.actual === j.level ? '相同' : '不同') : ''
+        ].join(','));
+    });
+    triggerDownload('刀柄標記資料.csv', lines.join('\n'));
+}
+
+/* ============ 關鍵差異分析（各點位） ============ */
+function meanVal(a) {
+    a = a.filter(v => v != null && isFinite(v));
+    return a.length ? a.reduce((s, v) => s + v, 0) / a.length : null;
+}
+
+function stdVal(a) {
+    a = a.filter(v => v != null && isFinite(v));
+    if (a.length < 2) return null;
+    const m = a.reduce((s, v) => s + v, 0) / a.length;
+    return Math.sqrt(a.reduce((s, v) => s + (v - m) * (v - m), 0) / (a.length - 1));
+}
+
+/* 疊差（左刀柄疊在右刀柄上為基準）：
+   Q6 與 #10–#17：疊差＝右Q7 − 右該點 − 左該點；Q7（其餘點位）＝左 − 右 */
+function isStackGapField(f) {
+    return f === 'Q6' || /^#1[0-7]$/.test(String(f));
+}
+function stackGapVal(row, f) {
+    if (!row) return null;
+    const d = row.data;
+    if (!d) return null;
+    if (isStackGapField(f)) {
+        const r7 = d.Q7 && d.Q7.right;
+        const md = d[f];
+        const rp = md && md.right;
+        const lp = md && md.left;
+        return (r7 != null && rp != null && lp != null) ? r7 - rp - lp : null;
+    }
+    const md = d[f];
+    return (md && md.left != null && md.right != null) ? md.left - md.right : null;
+}
+
+function diffAnalysis() {
+    const labeled = actualList();
+    const front = getFrontSet();
+    const el = document.getElementById('diffAnalysis');
+    if (labeled.length < 4) {
+        el.innerHTML = '<div class="text-red-600 font-bold">實際結果標記不足（至少 4 筆），目前 ' + labeled.length + ' 筆。</div>';
+        return;
+    }
+    const clsCount = [0, 0, 0, 0];
+    const cell = {};
+    FIELDS.forEach(f => { cell[f] = {}; [0, 1, 2, 3].forEach(c => { cell[f][c] = { L: [], R: [], gap: [], rat: [] }; }); });
+    labeled.forEach(x => {
+        clsCount[x.level]++;
+        const d = x.row.data;
+        FIELDS.forEach(f => {
+            const md = d[f];
+            if (!md) return;
+            const c = cell[f][x.level];
+            if (md.left != null) c.L.push(md.left);
+            if (md.right != null) c.R.push(md.right);
+            if (md.left != null && md.right != null) {
+                const g = isStackGapField(f) ? stackGapVal(x.row, f) : (md.left - md.right);
+                if (g != null) c.gap.push(g);
+                if (md.right !== 0) c.rat.push(md.left / md.right);
+            }
+        });
+    });
+
+    const FEAT_NAMES = { L: '左量測', R: '右量測', gap: '左−右疊差', rat: '左/右比值' };
+    const rank = [];
+    FIELDS.forEach(f => {
+        let best = { feat: '', score: -1 };
+        ['L', 'R', 'gap', 'rat'].forEach(feat => {
+            const means = [0, 1, 2, 3].map(c => meanVal(cell[f][c][feat]));
+            const vals = means.filter(m => m != null);
+            if (vals.length < 2) return;
+            const all = [];
+            [0, 1, 2, 3].forEach(c => all.push(...cell[f][c][feat]));
+            const sd = stdVal(all) || 1;
+            if (!sd) return;
+            const score = (Math.max(...vals) - Math.min(...vals)) / sd;
+            if (score > best.score) {
+                best = { feat, score, mn: Math.min(...vals), mx: Math.max(...vals),
+                         lo: means.indexOf(Math.min(...vals)), hi: means.indexOf(Math.max(...vals)) };
+            }
+        });
+        rank.push({ f, best });
+    });
+    rank.sort((a, b) => b.best.score - a.best.score);
+
+    const fmt = (m, sign) => m == null ? '–' : (sign && m >= 0 ? '+' : '') + m.toFixed(2);
+    const LMean = (f, c) => fmt(meanVal(cell[f][c].L));
+    const RMean = (f, c) => fmt(meanVal(cell[f][c].R));
+    const gapMean = (f, c) => fmt(meanVal(cell[f][c].gap), true);
+
+    let h = '<div class="font-bold mb-2">A. 各點位平均量測值與「疊差」（左刀疊在右刀上；<b>Q6、#10–#17 疊差＝右Q7−右該點−左該點</b>，Q7＝左−右，疊差為正＝左刀較高）</div>';
+    h += '<div class="overflow-x-auto"><table class="w-full text-xs border text-center whitespace-nowrap"><thead class="bg-fuchsia-100"><tr><th class="p-1 border">位置</th>';
+    LEVEL_LABEL.forEach((w, c) => { h += '<th class="p-1 border" colspan="3">' + w + '（' + clsCount[c] + '筆）<br><span class="font-normal">左 / 右 / 疊差</span></th>'; });
+    h += '<th class="p-1 border">區分分</th></tr></thead><tbody>';
+    rank.forEach(ro => {
+        const f = ro.f;
+        h += '<tr><td class="p-1 border font-semibold">' + f + '</td>';
+        [0, 1, 2, 3].forEach(c => {
+            const mark = ro.best.feat === 'gap' && (c === ro.best.lo || c === ro.best.hi);
+            h += '<td class="p-1 border">' + LMean(f, c) + '</td><td class="p-1 border">' + RMean(f, c) + '</td>'
+               + '<td class="p-1 border ' + (mark ? 'bg-yellow-100 font-bold' : '') + '">' + gapMean(f, c) + '</td>';
+        });
+        h += '<td class="p-1 border font-bold">' + (ro.best.score > 0 ? ro.best.score.toFixed(2) : '–') + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+
+    h += '<div class="font-bold mt-4 mb-2">B. 關鍵點位與組配差異解讀（依「區分分」排序）</div><ul class="list-disc pl-5 text-sm space-y-1">';
+    rank.filter(r => r.best.score > 0).slice(0, 7).forEach(ro => {
+        const b = ro.best;
+        h += '<li><b>' + ro.f + '</b>：以「' + FEAT_NAMES[b.feat] + '」最能區分（' + LEVEL_LABEL[b.hi] + ' 平均最高、' + LEVEL_LABEL[b.lo] + ' 最低，區分分 ' + b.score.toFixed(2) + '）；'
+           + (b.feat === 'gap' ? '疊差：<b>' + LEVEL_LABEL[b.hi] + '</b> 平均疊差＝' + fmt(b.mx, true) + '，' + LEVEL_LABEL[b.lo] + '＝' + fmt(b.mn, true)
+              : '平均由 ' + b.mn.toFixed(2) + ' → ' + b.mx.toFixed(2)) + '</li>';
+    });
+    h += '</ul>';
+
+    const curFront = getFrontSet();
+    let bestSig = 'LR', bestSigAcc = -1;
+    Object.keys(SIGNALS).forEach(sig => {
+        const a = evaluateConfig(labeled, sig, curFront, 1, 0);
+        if (a > bestSigAcc) { bestSigAcc = a; bestSig = sig; }
+    });
+    let bestSet = curFront, bestSetAcc = -1;
+    candidateFrontSets(curFront).forEach(s => {
+        const a = evaluateConfig(labeled, bestSig, s, 1, 0);
+        if (a > bestSetAcc) { bestSetAcc = a; bestSet = s; }
+    });
+    h += '<div class="font-bold mt-4 mb-2">C. 建議信號與建議前端區段（搭配「套用」使用）</div>';
+    h += '<div class="text-sm">在目前前端區段（' + [...curFront].sort().join('、') + '）下，資料中最好的信號＝<b>' + SIGNALS[bestSig].label + '</b>（還原準確率約 ' + Math.round(bestSigAcc * 100) + '%）。<br>';
+    h += '若可自由重選前端區段，最合此信號的區段＝<b>[' + [...bestSet].sort().join('、') + ']</b>（約 ' + Math.round(bestSetAcc * 100) + '%）。確認後可去③套用或微調。</div>';
+
+    h += '<div class="font-bold mt-4 mb-2">D. 提升準確率建議</div><ul class="list-disc pl-5 text-sm space-y-1">';
+    h += '<li>標記越多越好：目前標記 ' + labeled.length + '/' + state.rows.length + ' 筆，四種結果都要有樣本（目前：' + clsCount.map((c, i) => LEVEL_LABEL[i] + ' ' + c).join('、') + '）。</li>';
+    h += '<li>最該補標的是「與現行預測不同」的那幾筆（差異樣本最有價值）。</li>';
+    h += '<li>點位缺值＝該位置不參與判斷；補齊 Q6~#17 的左右量測值能提升回推準度。</li>';
+    h += '<li>基準值若本身偏移，回推結果會跟著偏：先確認各點位基準值與實際公差一致再回推。</li>';
+    h += '<li>「組配」判讀：區分分高的點位可直接勾入「前端區段」；若某類別在某一點位的「疊差」（Q6、#10–#17＝右Q7−右該點−左該點，Q7＝左−右）明顯為正且大，代表該處左刀壓得較高，常是「前端剪不斷」主因。</li>';
+    h += '</ul>';
+
+    /* E. 逐組左/右搭配分析 */
+    const stdE = getStandards();
+    h += '<div class="font-bold mt-4 mb-2">E. 逐組左/右搭配分析（左刀疊右：Q6、#10–#17 疊差＝右Q7−右該點−左該點；Q7＝左−右；藍色位置名＝前端區段）</div>';
+    h += '<div class="overflow-x-auto"><table class="w-full text-xs border text-center whitespace-nowrap"><thead class="bg-fuchsia-100"><tr><th class="p-1 border">編號</th><th class="p-1 border">實際</th>';
+    FIELDS.forEach(f => {
+        h += '<th class="p-1 border">' + (front.has(f) ? '<span class="text-blue-700">' + f + '*</span>' : f) + '</th>';
+    });
+    h += '</tr></thead><tbody>';
+    state.rows.forEach((r, i) => {
+        const dets = buildOutDetails(r, stdE, 'LR');
+        const dmap = {}; dets.forEach(d => { dmap[d.f] = d; });
+        h += '<tr><td class="p-1 border font-semibold">' + (i + 1) + '. ' + (r.name || '') + '</td>'
+           + '<td class="p-1 border">' + (r.actual != null ? LEVEL_LABEL[r.actual] : '<span class="text-gray-400">未標</span>') + '</td>';
+        FIELDS.forEach(f => {
+            const d = dmap[f];
+            const g = isStackGapField(f) ? stackGapVal(r, f) : (d && d.mLeft != null && d.mRight != null ? d.mLeft - d.mRight : null);
+            let s = '–', cls = 'text-gray-400';
+            if (g != null) {
+                s = (g >= 0 ? '+' : '−') + Math.abs(g).toFixed(2);
+                if (g >= 0.3) cls = 'text-red-600 font-bold';
+                else if (g <= -0.3) cls = 'text-blue-700 font-bold';
+            }
+            if (d && d.lOut) s += ' L↑';
+            if (d && d.rOut) s += ' R↑';
+            h += '<td class="p-1 border text-center ' + cls + '">' + s + '</td>';
+        });
+        h += '</tr>';
+    });
+    h += '</tbody></table></div>';
+    h += '<p class="text-xs text-gray-500 mt-1">疊差為正（紅）＝該點位左刀較高；負（藍）＝右刀較高（Q6、#10–#17 為右Q7−右該點−左該點；Q7 為左−右）；L↑/R↑＝該側超過基準值；*＝前端區段位置。</p>';
+
+    /* F. 現象規則邏輯：各現象與個別量測點位的關聯性、型別分類與說明 */
+    const rowFeats = state.rows.map(r => ({ r, dets: buildOutDetails(r, stdE, 'LR') }));
+    const META = [['el', '左超基準'], ['er', '右超基準'], ['gp', '疊差>0(左刀墊高)'], ['gn', '疊差<0(右刀墊高)'], ['big', '疊差大(≧0.3)']];
+    const FRONT_CAND = ['#17', '#16', '#15', '#14', 'Q6', 'Q7', '#13'];
+    const rtOf = list => {
+        const acc = {};
+        list.forEach(x => {
+            x.dets.forEach(d => {
+                const f = d.f;
+                const c = acc[f] || (acc[f] = { el: 0, er: 0, gp: 0, gn: 0, big: 0 });
+                const g = isStackGapField(f) ? stackGapVal(x.r, f) : (d.mLeft != null && d.mRight != null ? d.mLeft - d.mRight : null);
+                if (d.lOut) c.el++;
+                if (d.rOut) c.er++;
+                if (g != null) {
+                    if (g > 0) c.gp++;
+                    else if (g < 0) c.gn++;
+                    if (Math.abs(g) >= 0.3) c.big++;
+                }
+            });
+        });
+        return acc;
+    };
+    const labeledAll = rowFeats.filter(x => x.r.actual != null);
+    const ALLN = Math.max(1, labeledAll.length);
+    const overallAcc = rtOf(labeledAll);
+    h += '<div class="font-bold mt-4 mb-2">F. 現象規則邏輯：各現象與個別量測點位的關聯性與型別分類</div>';
+    h += '<div class="overflow-x-auto"><table class="w-full text-xs border whitespace-nowrap"><thead class="bg-fuchsia-100">'
+       + '<tr><th class="p-1 border">現象</th><th class="p-1 border">N</th><th class="p-1 border">型別分類</th>'
+       + '<th class="p-1 border text-left">高度關聯量測點位（佔比｜整體佔比）</th><th class="p-1 border text-left">關聯性說明（此現象由哪些點位造成）</th></tr></thead><tbody>';
+    [0, 1, 2, 3].forEach(lv => {
+        const rowsOf = labeledAll.filter(x => x.r.actual === lv);
+        if (!rowsOf.length) return;
+        const N = rowsOf.length;
+        const acc = rtOf(rowsOf);
+        const assoc = [];
+        FIELDS.forEach(f => {
+            const a = acc[f], o = overallAcc[f];
+            if (!a || !o) return;
+            META.forEach(([k, label]) => {
+                const rc = a[k] / N, rb = o[k] / ALLN;
+                const lift = rc - rb;
+                if (lift >= 0.2 && rc >= 0.4) assoc.push({ f, label, rc, rb, lift, k });
+            });
+        });
+        assoc.sort((x, y) => y.lift - x.lift);
+        const defining = assoc.filter(a => a.rc >= 0.5 && a.lift > 0);
+        const dKeys = [...new Set(defining.map(d => d.f))];
+        // 型別分類
+        let type = '';
+        if (!defining.length) type = lv === 0 ? '平整型（無超基準、疊差小）' : '零星間歇型（無集中點位）';
+        else if (lv === 0 && !defining.some(d => d.k === 'el' || d.k === 'er')) type = '平整型（超基準少）';
+        else {
+            const frontW = dKeys.filter(f => front.has(f)).length;
+            const dom = {};
+            defining.forEach(d => {
+                const k = d.label.split('(')[0];
+                dom[k] = (dom[k] || 0) + 1;
+            });
+            const domLb = Object.entries(dom).sort((a, b) => b[1] - a[1])[0][0];
+            if (lv === 2 && dKeys.length <= 4 && frontW >= 1) type = '前端集中型';
+            else if (dKeys.length >= 5) type = '全面分布型';
+            else if (domLb === '左超基準') type = '左側超標型';
+            else if (domLb === '右超基準') type = '右側超標型';
+            else if (domLb === '疊差>0') type = '疊差型（左刀墊高）';
+            else if (domLb === '疊差<0') type = '疊差型（右刀墊高）';
+            else if (domLb === '疊差大') type = '疊差幅度型';
+            else type = '混合局部型';
+        }
+        // 關聯性說明（依資料動態生成）
+        let narr;
+        if (lv === 0) {
+            narr = '各點位平均皆在基準內、疊差接近 0，屬正常平整組配；不會因超基準或墊高而剪不斷。';
+        } else if (!defining.length) {
+            narr = '沒有長時間集中的超標／疊差點位，較像個別時段、個別位置間歇性出現（落在基準門檻附近波動）。';
+        } else {
+            const pts = [...new Set(defining.map(d => d.f))].slice(0, 4).join('、');
+            const f0 = defining[0];
+            narr = '主要由「' + pts + '」引起；以 ' + f0.f + ' 的 ' + f0.label + ' 最顯著'
+                 + '（此現象 ' + Math.round(f0.rc * 100) + '%｜整體 ' + Math.round(f0.rb * 100) + '%）。';
+            if (lv === 3) narr += '超標涵蓋面廣、多點位同向，屬「全刀被整體墊高」的全面性現象。';
+            else if (lv === 2) narr += '集中在『' + dKeys.filter(f => front.has(f)).join('、') + '』等前端區段，前端一旦墊高或超基準即剪不斷。';
+            else if (lv === 1) narr += '點位偏零星、非全刀型，偏向偶發「不利」條件（未達前端集中）。';
+            if (defining.some(d => d.k === 'gp')) narr += '使用「左>右」信號可涵蓋這條線索。';
+        }
+        const smallN = N < 3 ? '（樣本少，僅參考）' : '';
+        let frontAdv = '';
+        if (lv === 2) {
+            const ptsU = [...new Set(assoc.filter(a => FRONT_CAND.indexOf(a.f) >= 0).map(a => a.f))].slice(0, 4);
+            if (ptsU.length) frontAdv = '<div class="text-gray-600">→ 建議前端區段納入：<b>' + ptsU.join('、')
+                + '</b>（再按「開始回推規則」驗證）</div>';
+        } else if (lv === 3) {
+            frontAdv = '<div class="text-gray-600">→ 屬全面分布型，重點是提升「全刀門檻」認定，前端區段影響其次。</div>';
+        }
+        h += '<tr><td class="p-1 border font-semibold">' + LEVEL_LABEL[lv] + '</td><td class="p-1 border">' + N + '</td>'
+           + '<td class="p-1 border">' + type + smallN + '</td>'
+           + '<td class="p-1 border text-left">' + (assoc.slice(0, 5).map(a => '「' + a.f + '」' + a.label + ' ' + Math.round(a.rc * 100) + '%｜' + Math.round(a.rb * 100) + '%').join('、') || '—') + '</td>'
+           + '<td class="p-1 border text-left">' + narr + frontAdv + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+    h += '<p class="text-xs text-gray-500 mt-1">「疊差」：Q6、#10–#17＝右Q7−右該點−左該點（正值＝左刀墊高），Q7＝左−右；「佔比｜整體佔比」是該現象內發生率對照所有標記組的發生率，集中度越高越可能是該現象的成因。高關聯點位可先勾進「前端區段」或改用「左>右」信號再做規則回推。</p>';
+
+    el.innerHTML = h;
+}
+
+/* ============ 範例 CSV ============ */
+function downloadSample() {
+    const header = ['刀柄組合', ...FIELDS.flatMap(f => [f + '左', f + '右'])];
+    const sample = [
+        header.join(','),
+        ['A-01（正常）', '0.30', '2.50', '2.00', '3.10', '1.90', '2.40', '2.10', '2.80', '2.10', '3.10', '2.00', '3.30', '1.80', '3.30', '1.50', '3.20', '1.10', '3.20', '0.60', '2.90'].join(','),
+        ['B-02（Q6、#10 超標）', '0.40', '2.50', '2.00', '3.10', '2.20', '2.40', '2.10', '2.80', '2.10', '3.10', '2.00', '3.30', '1.80', '3.30', '1.50', '3.20', '1.10', '3.20', '0.60', '2.90'].join(','),
+        ['C-03（前端超標）', '0.30', '2.50', '2.00', '3.10', '1.90', '2.40', '2.10', '2.80', '2.10', '3.10', '2.10', '3.41', '1.90', '3.48', '1.59', '3.43', '1.40', '4.10', '0.61', '3.90'].join(','),
+        ['D-04（全刀超標）', '0.95', '3.20', '2.80', '4.10', '2.50', '3.10', '2.80', '3.60', '3.00', '4.00', '2.90', '4.20', '2.70', '4.30', '2.30', '4.20', '1.90', '4.10', '1.40', '3.80'].join(','),
+        ['E-05（#16 右側超標→不利）', '0.35', '2.58', '2.10', '3.45', '1.90', '2.40', '2.10', '2.90', '2.10', '3.20', '2.00', '3.41', '1.80', '3.48', '1.50', '3.43', '1.10', '3.30', '0.60', '3.00'].join(',')
+    ];
+    const blob = new Blob(['\uFEFF' + sample.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = '刀柄量測範例.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+}
+
+/* ============ init ============ */
+document.getElementById('fileInput').addEventListener('change', handleFile);
+buildStdTable();
+wireFrontToZone();
+initKey();
+refreshLocalFiles();
+// 若有本機服務，自動嘗試載入預設刀柄檔案
+setTimeout(() => {
+    loadByPython();
+}, 300);
+</script>
+</body>
+</html>
